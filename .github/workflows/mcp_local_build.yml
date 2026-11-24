@@ -39,7 +39,7 @@ jobs:
 
       - name: Modo
         id: mode
-        shell: pwsh
+        shell: powershell
         run: |
           $mode = "${{ inputs.mode }}"; $clean = "${{ inputs.clean }}" -eq "true"
           if (-not $mode -and (Test-Path .github/mcp-build-mode)) {
@@ -48,11 +48,11 @@ jobs:
           }
           if (-not $mode) { $mode = "diag" }
           "Modo: $mode, limpiar: $clean"
-          "mode=$mode" >> $env:GITHUB_OUTPUT
-          "clean=$(if ($clean) { '-c' } else { '' })" >> $env:GITHUB_OUTPUT
+          $c = if ($clean) { '-c' } else { '' }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "mode=$mode`nclean=$c`n")
 
       - name: Diagnóstico del entorno
-        shell: pwsh
+        shell: powershell
         run: |
           "Procesadores lógicos: $env:NUMBER_OF_PROCESSORS"
           Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
@@ -82,6 +82,6 @@ jobs:
 
       - name: Ubicación del programa
         if: ${{ steps.mode.outputs.mode == 'slicer' || steps.mode.outputs.mode == 'all' }}
-        shell: pwsh
+        shell: powershell
         run: |
           Get-ChildItem C:\ob\build -Recurse -Filter orca-slicer.exe -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-List
