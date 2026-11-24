@@ -537,12 +537,13 @@ std::vector<int> cut(int obj_idx, int inst_idx, std::array<double, 3> point, std
         ModelInstance& inst   = instance_at(object, inst_idx);
         if (object.is_cut())
             throw std::invalid_argument("the object is already a cut part with connectors; cut it in the Cut gizmo");
+        // enum_bitmask::operator|= does not compile (it assigns an enum_bitmask to the int), so use |.
         ModelObjectCutAttributes attributes;
-        if (keep_upper)         attributes |= ModelObjectCutAttribute::KeepUpper;
-        if (keep_lower)         attributes |= ModelObjectCutAttribute::KeepLower;
-        if (place_on_cut_upper) attributes |= ModelObjectCutAttribute::PlaceOnCutUpper;
-        if (flip_lower)         attributes |= ModelObjectCutAttribute::FlipLower;
-        if (keep_paint)         attributes |= ModelObjectCutAttribute::KeepPaint;
+        if (keep_upper)         attributes = attributes | ModelObjectCutAttribute::KeepUpper;
+        if (keep_lower)         attributes = attributes | ModelObjectCutAttribute::KeepLower;
+        if (place_on_cut_upper) attributes = attributes | ModelObjectCutAttribute::PlaceOnCutUpper;
+        if (flip_lower)         attributes = attributes | ModelObjectCutAttribute::FlipLower;
+        if (keep_paint)         attributes = attributes | ModelObjectCutAttribute::KeepPaint;
         // The cut plane is the XY plane of this matrix, in the instance frame without its offset (as in
         // Plater::cut_horizontal).
         Transform3d cut_matrix = Transform3d::Identity();
