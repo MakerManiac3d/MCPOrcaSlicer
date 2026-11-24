@@ -24,6 +24,7 @@
 #include "slic3r/GUI/TaskManager.hpp"
 #include "format.hpp"
 #include "libslic3r_version.h"
+#include "McpBridgeAutostart.hpp"
 #include "BuildCommit.hpp"
 #include "Downloader.hpp"
 #include <boost/algorithm/string/split.hpp>
@@ -41,6 +42,7 @@
 #include <boost/filesystem/file_status.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/exception.hpp>
+#include <boost/system/error_code.hpp>
 #include <boost/locale/encoding_utf.hpp>
 #include <boost/log/detail/native_typeof.hpp>
 #include <cstdint>
@@ -483,7 +485,7 @@ public:
         m_bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF"));
         m_fg_color = StateColor::darkModeColorFor(wxColour("#6B6A6A"));
         m_progress_bg_color = StateColor::darkModeColorFor(wxColour("#DFDFDF"));
-        m_progress_fg_color = StateColor::darkModeColorFor(wxColour("#009688"));
+        m_progress_fg_color = StateColor::darkModeColorFor(wxColour("#C62828"));
         m_progress_h = FromDIP(6);
         bool dark_mode = m_fg_color != wxColour("#6B6A6A");
         wxSize sz  = m_window->GetClientSize();
@@ -2738,10 +2740,51 @@ void GUI_App::init_webview_runtime()
 }
 #endif
 
+// MCPOrcaSlicer keeps its own data folder so it can run beside OrcaSlicer without sharing presets, plugins or
+// settings. On the first start it seeds that folder from the OrcaSlicer folder next to it, skipping logs, caches,
+// backups and the live MCP bridge state. A failed copy only costs the user's presets, so it never stops start-up.
+static void seed_data_dir_from_orcaslicer(const boost::filesystem::path &data_dir_path)
+{
+    namespace fs = boost::filesystem;
+    boost::system::error_code ec;
+    if (fs::exists(data_dir_path, ec))
+        return;
+    const fs::path legacy = data_dir_path.parent_path() / SLIC3R_APP_KEY;
+    if (legacy == data_dir_path || !fs::is_directory(legacy, ec))
+        return;
+
+    const auto skipped = [](const fs::path &path, bool top_level) {
+        const std::string name = path.filename().string();
+        if (top_level && (name == "log" || name == "cache" || name == "ota" || name == "tmp" ||
+                          boost::starts_with(name, "user_backup")))
+            return true;
+        return name == "orca_mcp_bridge.json" || boost::ends_with(name, ".lock");
+    };
+    std::function<void(const fs::path &, const fs::path &, bool)> copy_tree =
+        [&](const fs::path &from, const fs::path &to, bool top_level) {
+            fs::create_directories(to);
+            for (const fs::directory_entry &entry : fs::directory_iterator(from)) {
+                if (skipped(entry.path(), top_level))
+                    continue;
+                const fs::path target = to / entry.path().filename();
+                if (fs::is_directory(entry.status()))
+                    copy_tree(entry.path(), target, false);
+                else if (fs::is_regular_file(entry.status()))
+                    fs::copy_file(entry.path(), target, fs::copy_options::overwrite_existing);
+            }
+        };
+    try {
+        copy_tree(legacy, data_dir_path, true);
+        std::cerr << "Seeded " << data_dir_path << " from " << legacy << std::endl;
+    } catch (const std::exception &ex) {
+        std::cerr << "Failed to seed " << data_dir_path << " from " << legacy << ": " << ex.what() << std::endl;
+    }
+}
+
 void GUI_App::init_app_config()
 {
 	// Profiles for the alpha are stored into the PrusaSlicer-alpha directory to not mix with the current release.
-    SetAppName(SLIC3R_APP_KEY);
+    SetAppName(MCP_APP_DATA_KEY);
 //	SetAppName(SLIC3R_APP_KEY "-alpha");
 //  SetAppName(SLIC3R_APP_KEY "-beta");
 //	SetAppDisplayName(SLIC3R_APP_NAME);
@@ -2756,6 +2799,7 @@ void GUI_App::init_app_config()
         // The same lookup the start-up code performs before GUI_App exists, so both read one file.
         const boost::filesystem::path data_dir_path(default_data_dir());
         migrate_flatpak_legacy_datadir(data_dir_path);
+        seed_data_dir_from_orcaslicer(data_dir_path);
         set_data_dir(data_dir_path.string());
         if (!boost::filesystem::exists(data_dir_path))
             boost::filesystem::create_directory(data_dir_path);
@@ -2779,6 +2823,7 @@ void GUI_App::init_app_config()
             std::string data_dir = wxStandardPaths::Get().GetUserDataDir().ToUTF8().data();
             //BBS create folder if not exists
             boost::filesystem::path data_dir_path(data_dir);
+            seed_data_dir_from_orcaslicer(data_dir_path);
             set_data_dir(data_dir);
             if (!boost::filesystem::exists(data_dir_path)){
                 boost::filesystem::create_directory(data_dir_path);
@@ -3643,6 +3688,8 @@ bool GUI_App::on_init_inner()
     plugin_mgr.discover_plugins(false, true);
 
     init_plugin_gui_wiring();
+    mcp_wire_bridge_autostart();
+    mcp_install_bundled_bridge();
 
     // Subscribe to the plugin loader and enumerate current actions (UI thread, once).
     m_action_registry->init();
@@ -4689,7 +4736,7 @@ void GUI_App::UpdateDarkUI(wxWindow* window, bool highlited/* = false*/, bool ju
         auto orig_col = window->GetBackgroundColour();
         auto bg_col = StateColor::darkModeColorFor(orig_col);
         // there are cases where the background color of an item is bright, specifically:
-        // * the background color of a button: #009688  -- 73
+        // * the background color of a button: #C62828  -- 73
         if (bg_col != orig_col) {
             window->SetBackgroundColour(bg_col);
         }
@@ -7014,7 +7061,7 @@ std::string GUI_App::format_display_version()
 {
     if (!version_display.empty()) return version_display;
 
-    version_display = SoftFever_VERSION;
+    version_display = SLIC3R_APP_FULL_NAME " " MCP_ORCA_VERSION;
     return version_display;
 }
 

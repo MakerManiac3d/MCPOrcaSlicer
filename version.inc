@@ -3,6 +3,10 @@
 
 set(SLIC3R_APP_NAME "OrcaSlicer")
 set(SLIC3R_APP_KEY "OrcaSlicer")
+# MCPOrcaSlicer: name of the user data folder and display version of this fork. SLIC3R_APP_NAME and
+# SLIC3R_APP_KEY stay unchanged because .3mf files record the former and translation catalogs use the latter.
+set(MCP_APP_DATA_KEY "MCPOrcaSlicer")
+set(MCP_ORCA_VERSION_SUFFIX "mcp.1")
 
 if(NOT DEFINED BBL_INTERNAL_TESTING)
 set(BBL_INTERNAL_TESTING "0")

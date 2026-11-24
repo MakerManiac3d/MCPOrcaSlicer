@@ -4,6 +4,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <libslic3r/BrimEarsPoint.hpp>
 #include <libslic3r/CustomGCode.hpp>
 #include <libslic3r/Geometry.hpp>
 #include <libslic3r/CutUtils.hpp>
@@ -27,6 +28,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <memory>
 #include <array>
 #include <map>
 #include <optional>
@@ -637,6 +640,134 @@ void set_layer_gcodes(int plate_idx, std::vector<std::map<std::string, py::objec
 
 // Project-level settings (filament colours, flushing volumes, ...): the same path the filament colour
 // picker takes (PlaterPresetComboBox::sync_colour_config).
+// Groups the edits that follow into one undo step, as a gizmo session does: one snapshot now, none until the
+// matching end_undo_group(). Groups nest; only the outermost pair takes effect. UI thread state only.
+int g_undo_group_depth = 0;
+
+void begin_undo_group(std::string name)
+{
+    PluginHostUi::run_on_ui_thread([&] {
+        if (g_undo_group_depth++ == 0) {
+            plater().take_snapshot(name.empty() ? std::string("Plugin: edit") : name);
+            plater().suppress_snapshots();
+        }
+    });
+}
+
+void end_undo_group()
+{
+    PluginHostUi::run_on_ui_thread([] {
+        if (g_undo_group_depth > 0 && --g_undo_group_depth == 0)
+            plater().allow_snapshots();
+    });
+}
+
+// Brim ears as the Brim Ears gizmo stores them: x, y, z in object coordinates and the ear radius. An empty list
+// removes them. The object's brim_type is left to set_config.
+void set_brim_ears(int obj_idx, std::vector<std::array<double, 4>> points)
+{
+    PluginHostUi::run_on_ui_thread([&] {
+        ModelObject& object = object_at(obj_idx);
+        GUI::Plater::TakeSnapshot snapshot(&plater(), "Plugin: brim ears");
+        object.brim_points.clear();
+        for (const auto& p : points)
+            object.brim_points.emplace_back(float(p[0]), float(p[1]), float(p[2]), float(p[3]));
+        plater().set_plater_dirty(true);
+        plater().changed_object(obj_idx);
+    });
+}
+
+std::vector<std::array<double, 4>> get_brim_ears(int obj_idx)
+{
+    std::vector<std::array<double, 4>> out;
+    PluginHostUi::run_on_ui_thread([&] {
+        for (const BrimPoint& p : object_at(obj_idx).brim_points)
+            out.push_back({p.pos.x(), p.pos.y(), p.pos.z(), p.head_front_radius});
+    });
+    return out;
+}
+
+// The plate settings dialog. print_sequence and spiral_mode accept "default" to follow the global setting.
+void set_plate(int plate_idx, std::optional<std::string> name, std::optional<std::string> bed_type,
+               std::optional<std::string> print_sequence, std::optional<std::string> spiral_mode, std::optional<bool> locked)
+{
+    std::optional<BedType> bt;
+    if (bed_type) {
+        const t_config_enum_values& names = ConfigOptionEnum<BedType>::get_enum_values();
+        const auto                  it    = names.find(*bed_type);
+        if (it == names.end())
+            throw py::value_error("unknown bed type \"" + *bed_type + "\"");
+        bt = BedType(it->second);
+    }
+    std::optional<PrintSequence> seq;
+    if (print_sequence) {
+        if (*print_sequence == "default")
+            seq = PrintSequence::ByDefault;
+        else {
+            const t_config_enum_values& names = ConfigOptionEnum<PrintSequence>::get_enum_values();
+            const auto                  it    = names.find(*print_sequence);
+            if (it == names.end())
+                throw py::value_error("unknown print sequence \"" + *print_sequence + "\"");
+            seq = PrintSequence(it->second);
+        }
+    }
+    if (spiral_mode && *spiral_mode != "default" && *spiral_mode != "1" && *spiral_mode != "0")
+        throw py::value_error("spiral_mode must be \"1\", \"0\" or \"default\"");
+
+    PluginHostUi::run_on_ui_thread([&] {
+        GUI::PartPlateList& plates = plater().get_partplate_list();
+        if (plate_idx < 0 || plate_idx >= plates.get_plate_count())
+            throw py::index_error("plate index " + std::to_string(plate_idx) + " out of range");
+        GUI::PartPlate* plate = plates.get_plate(plate_idx);
+        GUI::Plater::TakeSnapshot snapshot(&plater(), "Plugin: plate settings");
+        if (bt)
+            plate->set_bed_type(*bt);
+        if (seq)
+            plate->set_print_seq(*seq);
+        if (spiral_mode)
+            plate->set_spiral_vase_mode(*spiral_mode == "1", *spiral_mode == "default");
+        if (locked)
+            plate->lock(*locked);
+        if (name)
+            plater().rename_plate(plate_idx, *name);
+        plater().update_project_dirty_from_presets();
+        plater().set_plater_dirty(true);
+        DynamicPrintConfig plate_config = *plate->config();
+        plater().config_change_notification(plate_config, std::string("print_sequence"));
+        plater().update();
+    });
+}
+
+// The project information stored in the 3MF (Title, Designer, Description, License, CopyRight, Origin).
+void set_project_info(std::map<std::string, std::string> values)
+{
+    static const char* const keys[] = {"title", "designer", "description", "license", "copyright", "origin"};
+    for (const auto& [key, value] : values)
+        if (std::find_if(std::begin(keys), std::end(keys), [&](const char* k) { return key == k; }) == std::end(keys))
+            throw py::value_error("unknown project info \"" + key + "\"");
+    PluginHostUi::run_on_ui_thread([&] {
+        Model& model = plater().model();
+        if (!model.model_info)
+            model.model_info = std::make_shared<ModelInfo>();
+        ModelInfo& info = *model.model_info;
+        for (const auto& [key, value] : values) {
+            if (key == "title")
+                info.model_name = value;
+            else if (key == "designer")
+                model.SetDesigner(value, "");
+            else if (key == "description")
+                info.description = value;
+            else if (key == "license")
+                info.license = value;
+            else if (key == "copyright")
+                info.copyright = value;
+            else if (key == "origin")
+                info.origin = value;
+        }
+        plater().set_plater_dirty(true);
+    });
+}
+
 void set_project_config(std::map<std::string, std::string> values)
 {
     DynamicPrintConfig staged;
@@ -793,6 +924,17 @@ void host_bindings::register_edit(py::module_& host)
              "Set project settings (serialized values), e.g. filament_colour or flush_volumes_matrix.");
     edit.def("add_filament", &add_filament, py::arg("colour"),
              "Add a filament with this colour (#RRGGBB), like the filament panel's + button; returns the count.");
+    edit.def("begin_undo_group", &begin_undo_group, py::arg("name") = "",
+             "Group the following edits into one undo step until end_undo_group().");
+    edit.def("end_undo_group", &end_undo_group);
+    edit.def("set_brim_ears", &set_brim_ears, py::arg("object"), py::arg("points"),
+             "Brim ears [x, y, z, radius] in object coordinates; [] removes them.");
+    edit.def("get_brim_ears", &get_brim_ears, py::arg("object"));
+    edit.def("set_plate", &set_plate, py::arg("plate"), py::arg("name") = py::none(), py::arg("bed_type") = py::none(),
+             py::arg("print_sequence") = py::none(), py::arg("spiral_mode") = py::none(), py::arg("locked") = py::none(),
+             "Plate settings (0-based plate); print_sequence/spiral_mode accept \"default\".");
+    edit.def("set_project_info", &set_project_info, py::arg("values"),
+             "Project info: title, designer, description, license, copyright, origin.");
     edit.def("call_on_ui", &call_on_ui, py::arg("fn"),
              "Call fn() on the UI thread and return its result (exceptions propagate). For reading the model, "
              "exporting or anything else that needs the UI thread, from the script thread.");

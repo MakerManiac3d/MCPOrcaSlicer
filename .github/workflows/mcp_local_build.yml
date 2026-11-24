@@ -127,3 +127,20 @@ jobs:
         shell: powershell
         run: |
           Get-ChildItem C:\ob\build -Recurse -Filter orca-slicer.exe -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-List
+
+      - name: Paquete portable (.zip)
+        if: ${{ steps.mode.outputs.mode == 'slicer' || steps.mode.outputs.mode == 'all' }}
+        shell: powershell
+        run: |
+          $inc = Get-Content version.inc -Raw
+          $ver = ([regex]'SoftFever_VERSION "([^"]+)"').Match($inc).Groups[1].Value
+          $suf = ([regex]'MCP_ORCA_VERSION_SUFFIX "([^"]+)"').Match($inc).Groups[1].Value
+          $dist = 'C:\ob\dist'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $zip = Join-Path $dist "MCPOrcaSlicer-$ver-$suf-win64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          # tar de Windows crea .zip mucho más rápido que Compress-Archive. La carpeta queda como MCPOrcaSlicer\
+          # dentro del zip; sin data_dir, así usa %APPDATA%\MCPOrcaSlicer (crea data_dir junto al .exe para modo portable).
+          tar -a -c -f $zip -C C:\ob\build -s ',^OrcaSlicer,MCPOrcaSlicer,' --exclude 'OrcaSlicer/data_dir' OrcaSlicer
+          if ($LASTEXITCODE -ne 0) { throw "tar falló ($LASTEXITCODE)" }
+          Get-Item $zip | Select-Object FullName, Length, LastWriteTime | Format-List
