@@ -643,14 +643,15 @@ void set_layer_gcodes(int plate_idx, std::vector<std::map<std::string, py::objec
 // Groups the edits that follow into one undo step, as a gizmo session does: one snapshot now, none until the
 // matching end_undo_group(). Groups nest; only the outermost pair takes effect. UI thread state only.
 int                                              g_undo_group_depth = 0;
-std::unique_ptr<GUI::Plater::SuppressSnapshots> g_undo_group;
+// Not owned by a static: an open group must not touch the Plater from a destructor at exit.
+GUI::Plater::SuppressSnapshots*                  g_undo_group = nullptr;
 
 void begin_undo_group(std::string name)
 {
     PluginHostUi::run_on_ui_thread([&] {
         if (g_undo_group_depth++ == 0) {
             plater().take_snapshot(name.empty() ? std::string("Plugin: edit") : name);
-            g_undo_group = std::make_unique<GUI::Plater::SuppressSnapshots>(&plater());
+            g_undo_group = new GUI::Plater::SuppressSnapshots(&plater());
         }
     });
 }
@@ -658,8 +659,10 @@ void begin_undo_group(std::string name)
 void end_undo_group()
 {
     PluginHostUi::run_on_ui_thread([] {
-        if (g_undo_group_depth > 0 && --g_undo_group_depth == 0)
-            g_undo_group.reset();
+        if (g_undo_group_depth > 0 && --g_undo_group_depth == 0) {
+            delete g_undo_group;
+            g_undo_group = nullptr;
+        }
     });
 }
 
