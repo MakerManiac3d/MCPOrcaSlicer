@@ -100,7 +100,27 @@ jobs:
         shell: cmd
         run: |
           if exist %BUILD_DIR%\CMakeCache.txt findstr /c:"orv-deps" %BUILD_DIR%\CMakeCache.txt >nul && del %BUILD_DIR%\CMakeCache.txt
-          call build_win.bat -s -i --no-gettext --deps-dir %DEPS_DIR% --build-dir %BUILD_DIR% --slicer-args "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF" ${{ steps.mode.outputs.clean }}
+          call build_win.bat -s --no-gettext --deps-dir %DEPS_DIR% --build-dir %BUILD_DIR% --slicer-args "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF" ${{ steps.mode.outputs.clean }}
+
+      - name: Esperar a que se cierre MCPOrcaSlicer
+        if: ${{ steps.mode.outputs.mode == 'slicer' || steps.mode.outputs.mode == 'all' }}
+        shell: powershell
+        run: |
+          # Windows no deja reemplazar OrcaSlicer.dll mientras el programa instalado está abierto.
+          $deadline = (Get-Date).AddMinutes(30)
+          while ($true) {
+            $open = Get-Process orca-slicer -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:\ob\build\*' }
+            if (-not $open) { "MCPOrcaSlicer cerrado: se instala la nueva versión."; break }
+            if ((Get-Date) -gt $deadline) { throw "MCPOrcaSlicer sigue abierto tras 30 minutos: ciérralo y vuelve a lanzar la instalación." }
+            "Esperando a que se cierre MCPOrcaSlicer (PID $($open.Id -join ', '))..."
+            Start-Sleep -Seconds 15
+          }
+
+      - name: Instalar en C:\ob\build\OrcaSlicer
+        if: ${{ steps.mode.outputs.mode == 'slicer' || steps.mode.outputs.mode == 'all' }}
+        shell: cmd
+        run: |
+          call build_win.bat -s -i --no-configure --no-gettext --deps-dir %DEPS_DIR% --build-dir %BUILD_DIR%
 
       - name: Ubicación del programa
         if: ${{ steps.mode.outputs.mode == 'slicer' || steps.mode.outputs.mode == 'all' }}
