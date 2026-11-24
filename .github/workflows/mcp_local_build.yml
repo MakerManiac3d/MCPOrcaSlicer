@@ -43,7 +43,7 @@ jobs:
         run: |
           $mode = "${{ inputs.mode }}"; $clean = "${{ inputs.clean }}" -eq "true"
           if (-not $mode -and (Test-Path .github/mcp-build-mode)) {
-            $lines = Get-Content .github/mcp-build-mode | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            $lines = @(Get-Content .github/mcp-build-mode | ForEach-Object { $_.Trim() } | Where-Object { $_ })
             $mode = $lines[0]; $clean = $lines -contains "clean"
           }
           if (-not $mode) { $mode = "diag" }
