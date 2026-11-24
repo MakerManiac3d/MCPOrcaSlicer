@@ -692,6 +692,28 @@ int add_filament(std::string colour)
     return count;
 }
 
+// Run a Python callable on the UI thread and return its result: the host's own marshaling, so a plugin
+// can read the model or export the project from its script thread without a UI page to pump calls.
+py::object call_on_ui(py::function fn)
+{
+    py::object result, err_type, err_value, err_trace;
+    PluginHostUi::run_on_ui_thread([&] {
+        py::gil_scoped_acquire gil;
+        try {
+            result = fn();
+        } catch (py::error_already_set& e) {
+            err_type  = e.type();
+            err_value = e.value();
+            err_trace = e.trace();
+        }
+    });
+    if (err_type) {
+        PyErr_Restore(err_type.release().ptr(), err_value.release().ptr(), err_trace.release().ptr());
+        throw py::error_already_set();
+    }
+    return result;
+}
+
 } // namespace
 
 void host_bindings::register_edit(py::module_& host)
@@ -771,6 +793,9 @@ void host_bindings::register_edit(py::module_& host)
              "Set project settings (serialized values), e.g. filament_colour or flush_volumes_matrix.");
     edit.def("add_filament", &add_filament, py::arg("colour"),
              "Add a filament with this colour (#RRGGBB), like the filament panel's + button; returns the count.");
+    edit.def("call_on_ui", &call_on_ui, py::arg("fn"),
+             "Call fn() on the UI thread and return its result (exceptions propagate). For reading the model, "
+             "exporting or anything else that needs the UI thread, from the script thread.");
     edit.def("arrange", [] { PluginHostUi::run_on_ui_thread([] { plater().arrange(); }); }, "Arrange the plate (as the toolbar).");
     edit.def("orient", [] { PluginHostUi::run_on_ui_thread([] { plater().orient(); }); }, "Auto-orient (as the toolbar).");
     edit.def("reslice", [] { PluginHostUi::run_on_ui_thread([] { plater().reslice(); }); }, "Slice the current plate.");
