@@ -67,11 +67,27 @@ jobs:
           if (Test-Path "C:\Strawberry\perl\bin\perl.exe") { "Strawberry Perl: C:\Strawberry" } else { "Strawberry Perl: no instalado" }
           whoami
 
+      - name: Perl portable (lo necesita OpenSSL)
+        if: ${{ steps.mode.outputs.mode == 'deps' || steps.mode.outputs.mode == 'all' }}
+        shell: powershell
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          if (-not (Test-Path C:\ob\perl\perl\bin\perl.exe)) {
+            New-Item -ItemType Directory -Force C:\ob | Out-Null
+            $rel = Invoke-RestMethod https://api.github.com/repos/StrawberryPerl/Perl-Dist-Strawberry/releases/latest
+            $asset = $rel.assets | Where-Object { $_.name -like '*64bit-portable.zip' } | Select-Object -First 1
+            "Descargando $($asset.name)"
+            Invoke-WebRequest $asset.browser_download_url -OutFile C:\ob\perl.zip
+            Expand-Archive C:\ob\perl.zip C:\ob\perl -Force
+            Remove-Item C:\ob\perl.zip
+          }
+          & C:\ob\perl\perl\bin\perl.exe -v | Select-String "This is perl"
+
       - name: Dependencias (deps)
         if: ${{ steps.mode.outputs.mode == 'deps' || steps.mode.outputs.mode == 'all' }}
         shell: cmd
         run: |
-          if exist C:\Strawberry\perl\bin set "PATH=C:\Strawberry\perl\bin;C:\Strawberry\c\bin;%PATH%"
+          set "PATH=C:\ob\perl\perl\bin;%PATH%"
           call build_win.bat -d --deps-dir %DEPS_DIR% ${{ steps.mode.outputs.clean }}
 
       - name: OrcaSlicer
