@@ -642,14 +642,15 @@ void set_layer_gcodes(int plate_idx, std::vector<std::map<std::string, py::objec
 // picker takes (PlaterPresetComboBox::sync_colour_config).
 // Groups the edits that follow into one undo step, as a gizmo session does: one snapshot now, none until the
 // matching end_undo_group(). Groups nest; only the outermost pair takes effect. UI thread state only.
-int g_undo_group_depth = 0;
+int                                              g_undo_group_depth = 0;
+std::unique_ptr<GUI::Plater::SuppressSnapshots> g_undo_group;
 
 void begin_undo_group(std::string name)
 {
     PluginHostUi::run_on_ui_thread([&] {
         if (g_undo_group_depth++ == 0) {
             plater().take_snapshot(name.empty() ? std::string("Plugin: edit") : name);
-            plater().suppress_snapshots();
+            g_undo_group = std::make_unique<GUI::Plater::SuppressSnapshots>(&plater());
         }
     });
 }
@@ -658,7 +659,7 @@ void end_undo_group()
 {
     PluginHostUi::run_on_ui_thread([] {
         if (g_undo_group_depth > 0 && --g_undo_group_depth == 0)
-            plater().allow_snapshots();
+            g_undo_group.reset();
     });
 }
 
