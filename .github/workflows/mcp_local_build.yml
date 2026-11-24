@@ -66,6 +66,10 @@ jobs:
           }
           if (Test-Path "C:\Strawberry\perl\bin\perl.exe") { "Strawberry Perl: C:\Strawberry" } else { "Strawberry Perl: no instalado" }
           whoami
+          "--- Variables de entorno que pueden interferir (OpenRevers, CMake, Qt, OCCT):"
+          Get-ChildItem env: | Where-Object { $_.Name -match 'CMAKE|OCC|CASCADE|QT|VCPKG|BOOST|TBB|EIGEN|_DIR$|_ROOT$' -or $_.Value -match 'orv-deps' } | ForEach-Object { "{0} = {1}" -f $_.Name, $_.Value }
+          "--- Registro de paquetes de CMake del usuario:"
+          if (Test-Path HKCU:\Software\Kitware\CMake\Packages) { Get-ChildItem HKCU:\Software\Kitware\CMake\Packages | ForEach-Object { $_.PSChildName } }
 
       - name: Perl portable (lo necesita OpenSSL)
         if: ${{ steps.mode.outputs.mode == 'deps' || steps.mode.outputs.mode == 'all' }}
