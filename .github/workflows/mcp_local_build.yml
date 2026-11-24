@@ -1,0 +1,68 @@
+# Compilación de la rama MCP en el ejecutor propio (el PC "DISEÑO"), con las dependencias y la
+# compilación en rutas cortas y persistentes (C:\ob) para que las recompilaciones sean incrementales.
+name: MCP local build
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'diag | deps | slicer | all'
+        default: 'diag'
+        type: string
+      clean:
+        description: 'Borrar la compilación previa del modo elegido'
+        default: false
+        type: boolean
+
+concurrency:
+  group: mcp-local-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 600
+    env:
+      DEPS_DIR: C:\ob\deps
+      BUILD_DIR: C:\ob\build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+          clean: false
+
+      - name: Diagnóstico del entorno
+        shell: pwsh
+        run: |
+          "Procesadores lógicos: $env:NUMBER_OF_PROCESSORS"
+          Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+          "RAM (GB): " + [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
+          Get-PSDrive C | Select-Object Used, Free | Format-List
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) { & $vswhere -products * -format text | Select-String "installationPath|displayName|installationVersion" }
+          foreach ($t in "cmake","perl","git","ninja","winget","python") {
+            $c = Get-Command $t -ErrorAction SilentlyContinue
+            "{0,-7} {1}" -f $t, ($(if ($c) { $c.Source } else { "NO ENCONTRADO" }))
+          }
+          if (Test-Path "C:\Strawberry\perl\bin\perl.exe") { "Strawberry Perl: C:\Strawberry" } else { "Strawberry Perl: no instalado" }
+          whoami
+
+      - name: Dependencias (deps)
+        if: ${{ inputs.mode == 'deps' || inputs.mode == 'all' }}
+        shell: cmd
+        run: |
+          if exist C:\Strawberry\perl\bin set "PATH=C:\Strawberry\perl\bin;C:\Strawberry\c\bin;%PATH%"
+          call build_win.bat -d --deps-dir %DEPS_DIR% ${{ inputs.clean && '-c' || '' }}
+
+      - name: OrcaSlicer
+        if: ${{ inputs.mode == 'slicer' || inputs.mode == 'all' }}
+        shell: cmd
+        run: |
+          call build_win.bat -s -i --no-gettext --deps-dir %DEPS_DIR% --build-dir %BUILD_DIR% ${{ inputs.clean && '-c' || '' }}
+
+      - name: Ubicación del programa
+        if: ${{ inputs.mode == 'slicer' || inputs.mode == 'all' }}
+        shell: pwsh
+        run: |
+          Get-ChildItem C:\ob\build -Recurse -Filter orca-slicer.exe -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-List
