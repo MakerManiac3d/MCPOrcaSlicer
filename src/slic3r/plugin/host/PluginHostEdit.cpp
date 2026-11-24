@@ -9,6 +9,7 @@
 #include <libslic3r/CutUtils.hpp>
 #include <libslic3r/Format/ProjectStrategy.hpp>
 #include <libslic3r/Model.hpp>
+#include <libslic3r/PresetBundle.hpp>
 #include <libslic3r/PrintConfig.hpp>
 #include <libslic3r/Slicing.hpp>
 #include <libslic3r/TriangleMesh.hpp>
@@ -21,6 +22,8 @@
 #include <slic3r/GUI/Plater.hpp>
 
 #include <boost/filesystem/path.hpp>
+#include <wx/colour.h>
+#include <wx/string.h>
 
 #include <algorithm>
 #include <cmath>
@@ -631,6 +634,63 @@ void set_layer_gcodes(int plate_idx, std::vector<std::map<std::string, py::objec
     });
 }
 
+// Project-level settings (filament colours, flushing volumes, ...): the same path the filament colour
+// picker takes (PlaterPresetComboBox::sync_colour_config).
+void set_project_config(std::map<std::string, std::string> values)
+{
+    DynamicPrintConfig staged;
+    ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::Disable);
+    for (const auto& [key, value] : values) {
+        if (print_config_def.get(key) == nullptr)
+            throw py::value_error("unknown setting \"" + key + "\"");
+        staged.set_deserialize(key, value, ctx);
+    }
+    PluginHostUi::run_on_ui_thread([&] {
+        DynamicPrintConfig& project = GUI::wxGetApp().preset_bundle->project_config;
+        for (const auto& [key, value] : values)
+            if (!project.has(key))
+                throw std::invalid_argument("\"" + key + "\" is not a project setting");
+        DynamicPrintConfig cfg_new = project;
+        cfg_new.apply(staged);
+        // A plain colour change keeps the multi-colour list and colour type in step, as the picker does.
+        if (staged.has("filament_colour")) {
+            const auto& colours = staged.option<ConfigOptionStrings>("filament_colour")->values;
+            if (auto* multi = cfg_new.option<ConfigOptionStrings>("filament_multi_colour")) {
+                if (multi->values.size() < colours.size())
+                    multi->values.resize(colours.size());
+                for (size_t i = 0; i < colours.size(); ++i)
+                    if (multi->values[i].find(' ') == std::string::npos)
+                        multi->values[i] = colours[i];
+            }
+            if (auto* types = cfg_new.option<ConfigOptionStrings>("filament_colour_type"))
+                if (types->values.size() < colours.size())
+                    types->values.resize(colours.size(), "1");
+        }
+        project.apply(cfg_new);
+        plater().update_project_dirty_from_presets();
+        plater().sidebar().update_all_preset_comboboxes();
+        plater().on_config_change(cfg_new);
+    });
+}
+
+// The filament panel's "+" button: adds a physical filament with the given colour; returns the new count.
+int add_filament(std::string colour)
+{
+    int count = 0;
+    PluginHostUi::run_on_ui_thread([&] {
+        const wxColour col(wxString::FromUTF8(colour));
+        if (!col.IsOk())
+            throw std::invalid_argument("invalid colour \"" + colour + "\"");
+        auto* bundle = GUI::wxGetApp().preset_bundle;
+        const size_t before = bundle->filament_presets.size();
+        plater().sidebar().add_custom_filament(col);
+        count = int(bundle->num_physical_filaments());
+        if (bundle->filament_presets.size() == before)
+            throw std::runtime_error("no filament was added (the maximum number of filaments may be reached)");
+    });
+    return count;
+}
+
 } // namespace
 
 void host_bindings::register_edit(py::module_& host)
@@ -706,6 +766,10 @@ void host_bindings::register_edit(py::module_& host)
     edit.def("set_layer_gcodes", &set_layer_gcodes, py::arg("plate"), py::arg("items"), py::arg("mode") = "SingleExtruder",
              "Replace a plate's per-layer G-code (0-based plate): items are dicts with z, type (pause, color_change, "
              "tool_change, template, custom), extruder, color, extra.");
+    edit.def("set_project_config", &set_project_config, py::arg("values"),
+             "Set project settings (serialized values), e.g. filament_colour or flush_volumes_matrix.");
+    edit.def("add_filament", &add_filament, py::arg("colour"),
+             "Add a filament with this colour (#RRGGBB), like the filament panel's + button; returns the count.");
     edit.def("arrange", [] { PluginHostUi::run_on_ui_thread([] { plater().arrange(); }); }, "Arrange the plate (as the toolbar).");
     edit.def("orient", [] { PluginHostUi::run_on_ui_thread([] { plater().orient(); }); }, "Auto-orient (as the toolbar).");
     edit.def("reslice", [] { PluginHostUi::run_on_ui_thread([] { plater().reslice(); }); }, "Slice the current plate.");
