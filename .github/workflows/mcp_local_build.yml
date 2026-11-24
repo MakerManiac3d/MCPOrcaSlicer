@@ -92,10 +92,6 @@ jobs:
         shell: cmd
         run: |
           set "PATH=C:\ob\perl\perl\bin;%PATH%"
-          REM Las dependencias se compilan fuera del repositorio (rutas cortas). Orca entonces calcula los
-          REM parches de "git apply --directory" con una ruta que sale del repo y git la rechaza; con el techo
-          REM de git en el espacio de trabajo no detecta el repositorio y aplica los parches como archivos sueltos.
-          set "GIT_CEILING_DIRECTORIES=%GITHUB_WORKSPACE%"
           REM El registro de paquetes de CMake del usuario apunta a otras instalaciones (OpenRevers): se ignora.
           call build_win.bat -d --deps-dir %DEPS_DIR% --deps-args "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF" ${{ steps.mode.outputs.clean }}
 

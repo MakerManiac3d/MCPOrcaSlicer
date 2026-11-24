@@ -460,6 +460,12 @@ if((REV_PARSE_RESULT EQUAL 0) AND (REV_PARSE_OUTPUT STREQUAL "true"))
     set(IN_GIT_REPO TRUE)
     # Find relative path from root to source used for adjusting patch command
     file(RELATIVE_PATH BINARY_DIR_REL  ${CMAKE_SOURCE_DIR}/.. ${CMAKE_BINARY_DIR})
+    # A deps tree outside the checkout (build_win.bat --deps-dir) is not in this repository: git apply
+    # finds no repository there, applies the patches relative to the dependency's own source tree, and
+    # rejects a --directory that climbs out of the work tree.
+    if (BINARY_DIR_REL MATCHES "^\\.\\.")
+        set(IN_GIT_REPO FALSE)
+    endif ()
 endif ()
 
 include(OCCT/OCCT.cmake)
