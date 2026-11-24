@@ -2,7 +2,12 @@
 # compilación en rutas cortas y persistentes (C:\ob) para que las recompilaciones sean incrementales.
 name: MCP local build
 
+# En un fork solo se pueden lanzar a mano los flujos de la rama principal, así que este se lanza al
+# subir cambios a mcp-api y lee qué hacer de .github/mcp-build-mode (diag, deps, slicer, all o none;
+# añadir "clean" en una segunda línea borra antes la compilación del modo elegido).
 on:
+  push:
+    branches: [mcp-api]
   workflow_dispatch:
     inputs:
       mode:
@@ -32,6 +37,20 @@ jobs:
           lfs: false
           clean: false
 
+      - name: Modo
+        id: mode
+        shell: pwsh
+        run: |
+          $mode = "${{ inputs.mode }}"; $clean = "${{ inputs.clean }}" -eq "true"
+          if (-not $mode -and (Test-Path .github/mcp-build-mode)) {
+            $lines = Get-Content .github/mcp-build-mode | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            $mode = $lines[0]; $clean = $lines -contains "clean"
+          }
+          if (-not $mode) { $mode = "diag" }
+          "Modo: $mode, limpiar: $clean"
+          "mode=$mode" >> $env:GITHUB_OUTPUT
+          "clean=$(if ($clean) { '-c' } else { '' })" >> $env:GITHUB_OUTPUT
+
       - name: Diagnóstico del entorno
         shell: pwsh
         run: |
@@ -49,20 +68,20 @@ jobs:
           whoami
 
       - name: Dependencias (deps)
-        if: ${{ inputs.mode == 'deps' || inputs.mode == 'all' }}
+        if: ${{ steps.mode.outputs.mode == 'deps' || steps.mode.outputs.mode == 'all' }}
         shell: cmd
         run: |
           if exist C:\Strawberry\perl\bin set "PATH=C:\Strawberry\perl\bin;C:\Strawberry\c\bin;%PATH%"
-          call build_win.bat -d --deps-dir %DEPS_DIR% ${{ inputs.clean && '-c' || '' }}
+          call build_win.bat -d --deps-dir %DEPS_DIR% ${{ steps.mode.outputs.clean }}
 
       - name: OrcaSlicer
-        if: ${{ inputs.mode == 'slicer' || inputs.mode == 'all' }}
+        if: ${{ steps.mode.outputs.mode == 'slicer' || steps.mode.outputs.mode == 'all' }}
         shell: cmd
         run: |
-          call build_win.bat -s -i --no-gettext --deps-dir %DEPS_DIR% --build-dir %BUILD_DIR% ${{ inputs.clean && '-c' || '' }}
+          call build_win.bat -s -i --no-gettext --deps-dir %DEPS_DIR% --build-dir %BUILD_DIR% ${{ steps.mode.outputs.clean }}
 
       - name: Ubicación del programa
-        if: ${{ inputs.mode == 'slicer' || inputs.mode == 'all' }}
+        if: ${{ steps.mode.outputs.mode == 'slicer' || steps.mode.outputs.mode == 'all' }}
         shell: pwsh
         run: |
           Get-ChildItem C:\ob\build -Recurse -Filter orca-slicer.exe -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime | Format-List
